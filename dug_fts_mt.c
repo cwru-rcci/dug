@@ -12,15 +12,22 @@
 #include<sys/stat.h>
 
 #define MAXGIDS    128
-#define MAXPATHLEN 2048
+#define MAXPATHLEN 4096 
+#define INODETABLE 16384 
 
 extern errno;
-
+volatile bool exit_now = false;
 bool  verbose = false, json = false, output_names = false, size_in_blocks = false;
-int   max_errors = 128, n_errors = 0;
+int   max_errors = 128, n_errors = 0, n_threads = 4;
+volatile int exit_status = 0;
 char  **error_strs;
 
 pthread_mutex_t error_mutex;
+
+struct inode_entry {
+    long long unsigned int num;
+    void* next;
+};
 
 struct tr_args {
     char* path;
@@ -72,17 +79,75 @@ int get_name(unsigned int gid, char* name) {
     return 0;
 }
 
+int insert_inode(long long unsigned int num, struct inode_entry* table[]) {
+    int index = num % INODETABLE;
+    struct inode_entry *entry = table[index];
+    
+    // Starting new linked list
+    if(entry == NULL) {
+        entry = malloc(sizeof(struct inode_entry));
+        entry->num = num;
+        entry->next = NULL;
+	if(verbose)
+            printf("Added new entry for inode %llu\n", num);
+	table[index] = entry;
+	return 0;
+    }
+
+    // Find existing inode or end of linked list
+    while(1) {
+	if(entry->num == num)
+	    return 1;
+	else if(entry->next == NULL)
+	    break;
+	else
+	    entry = entry->next;
+    }
+
+    // Insert new inode
+    entry->next = malloc(sizeof(struct inode_entry));
+    ((struct inode_entry *)(entry->next))->num = num;
+    ((struct inode_entry *)(entry->next))->next = NULL;
+    if(verbose)
+        printf("Added LL node for inode %llu\n", num);
+    return 0;
+}
+
+int free_inode_table(struct inode_entry* table[]) {
+    int i;
+    struct inode_entry *entry, *next;
+    for(i=0;i<INODETABLE;i++) {
+	entry = NULL;
+	next = NULL;
+        if(table[i] != NULL)
+            entry = table[i];
+            
+	while(entry != NULL) {
+            next = entry->next;
+	    free(entry);
+	    entry = next;
+        }
+    }
+    return 0;
+}
+
 int insert_or_update(unsigned int gid, long long unsigned int size, unsigned int gids[], long long unsigned int sizes[]) {
     int index = find_index(gid, gids);
-    if(index == -1)
+    if(index == -1) {
+        exit_now = true;
+        exit_status = 2;
         return 1;
+    }
     sizes[index] += size;
     return 0;
 }
 
 int store_error(char* path, char* error) {
-    if(n_errors >= max_errors)
+    if(n_errors >= max_errors) {
+        exit_now = true;
+        exit_status = 3;
         return 1;
+    }
 
     // Use mutex to manage concurrent access to global
     // errors array
@@ -97,11 +162,11 @@ int store_error(char* path, char* error) {
     return 0;
 }
 
-int output_json(void* results, int n_results) {
+int output_json(void* results, int n_results, long long unsigned int total) {
     struct tr_args **descendents = results;
     int i, j;
     int out_dir = 0, out_size = 0;
-    unsigned long long int total = 0, gid, size;
+    unsigned long long int gid, size;
     char* name_buffer = malloc(2048);
     printf("{\n  \"errors\": [\n");
     
@@ -111,7 +176,7 @@ int output_json(void* results, int n_results) {
         printf("    \"%s\"", error_strs[i]);
     }
     printf("\n  ],\n  \"subdirs\": {\n");
-    for(i=0;i<n_results;i++) {
+    for(i=0;i<n_results-1;i++) {
         out_size = 0;
         if(out_dir > 0)
             printf(",\n");
@@ -129,11 +194,29 @@ int output_json(void* results, int n_results) {
                 printf(",\n");
             out_size += 1;
             printf("      \"%s\":%llu", name_buffer, size);
-            total += size;
         }
         printf("\n    }");
     }
-    printf("\n  },\n"); 
+    printf("\n  },\n");
+
+    // Output the group totals summary
+    out_size = 0;
+    printf("  \"summary\": {\n");
+    for(j=0;j<**(descendents[n_results-1]->n_results)*2;j+=2) {
+        gid = (*(descendents[n_results-1]->data))[j];
+        size = (*(descendents[n_results-1]->data))[j+1];
+        if(output_names)
+            get_name(gid, name_buffer);
+        else
+            sprintf(name_buffer, "%u", gid);
+        if(out_size > 0)
+            printf(",\n");
+        out_size += 1;
+        printf("    \"%s\":%llu", name_buffer, size);
+    }
+    printf("\n  },\n");
+
+    // Output the grand total 
     printf("  \"total\":%llu", total);
     printf("\n}\n");
     free(name_buffer);
@@ -181,6 +264,33 @@ void pack_result(struct tr_args *result, unsigned int gids[], long long unsigned
     }
 }
 
+int add_summary(void* tstructs, int n_results, long long unsigned int *total) {
+    struct tr_args **results = tstructs;
+    int i, j;
+    int out_dir = 0, out_size = 0;
+    unsigned long long int size, sizes[MAXGIDS];
+    unsigned int gid, gids[MAXGIDS];
+
+    // Fil the hash table with initialization values
+    for(i=0;i<MAXGIDS;i++) {
+        gids[i] = UINT_MAX;
+        sizes[i] = 0;
+    }
+
+    for(i=0;i<n_results-1;i++) {
+        for(j=0;j<**(results[i]->n_results)*2;j+=2) {
+            gid = (*(results[i]->data))[j];
+            size = (*(results[i]->data))[j+1];
+            if(insert_or_update(gid, size, gids, sizes) != 0)
+                return 1;
+            *total += size;
+        }
+    }
+    
+    pack_result(results[n_results-1], gids, sizes);
+    return 0;
+}
+
 static void* fts_walk(void *arg) {
     FTS *stream;
     FTSENT *entry;
@@ -190,11 +300,11 @@ static void* fts_walk(void *arg) {
     long long unsigned int audit_size;
     long long unsigned int sizes[MAXGIDS];
     unsigned int gids[MAXGIDS];
+    struct inode_entry *table[INODETABLE];
     struct tr_args *targs = arg;
     int** n_results = targs->n_results;
     long long unsigned int **data = targs->data;
     char* path = targs->path;
-
 
     // FTS needs a null-terminated list of paths as argument
     char *paths[2] = {path, NULL};
@@ -204,10 +314,15 @@ static void* fts_walk(void *arg) {
         return "FTSOPENFAIL"; 
     }
 
-    // Fil the hash table with initialization values
+    // Fil the group/usage hash table with initialization values
     for(i=0;i<MAXGIDS;i++) {
         gids[i] = UINT_MAX;
         sizes[i] = 0;
+    }
+
+    // Fill the inode lookup table with default values
+    for(i=0;i<INODETABLE;i++) {
+        table[i] = NULL;
     }
 
     while((entry=fts_read(stream))) {
@@ -216,6 +331,9 @@ static void* fts_walk(void *arg) {
             continue;
         }
 
+        if(exit_now)
+            return "TASKEXIT";
+
         // Process the file or directory
         insert = false;
         error = false;
@@ -223,7 +341,7 @@ static void* fts_walk(void *arg) {
             case FTS_F:
                 if(verbose)
                     printf("+file      %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
-                insert = true;
+		insert = true;
                 break;
             case FTS_D:
                 if(verbose)
@@ -267,6 +385,22 @@ static void* fts_walk(void *arg) {
                     printf("-fts_skip  %s\n", entry->fts_path);
         }
 
+        // Store error, and exit if maximum errors reached 
+        if(error) {
+            if(store_error(entry->fts_path, strerror(entry->fts_errno)) != 0) {
+                return "MAXERRORS";
+            }
+        }
+
+        // Skip inodes that have been previously visited
+	if(insert && (entry->fts_statp->st_nlink > 1)) {
+	    if((i=insert_inode(entry->fts_statp->st_ino, table)) != 0) {
+                insert = false;
+	        if(verbose)
+	            printf("-inode   %s inode %llu has already been counted\n", entry->fts_path, entry->fts_statp->st_ino);
+	    }
+	}
+
         // Update the running usage in the hash table
         if(insert) {
             // Compute size as either file size, or size of
@@ -281,14 +415,9 @@ static void* fts_walk(void *arg) {
             }
         }
 
-        // Store error, and exit if maximum errors reached 
-        if(error) {
-            if(store_error(entry->fts_path, strerror(entry->fts_errno)) != 0) {
-                return "MAXERRORS";
-            }
-        }
     }
     pack_result(targs, gids, sizes);
+    free_inode_table(table);
 
     fts_close(stream);
     return "OK";
@@ -362,8 +491,8 @@ int tr_find_slot(pthread_t *thread_ids[], unsigned int max_n_threads) {
         // If no slots recovered, wait a short interval. Otherwise, 
         // return the index of the first slot we opened up. 
         if((i=tr_recover_slots(thread_ids, max_n_threads)) == -1) {
-            printf("tr   :Waiting for thread slot to become available\n");
-            sleep(1);
+            //printf("tr   :Waiting for thread slot to become available\n");
+            usleep(10000);
         }
         else
             return i;
@@ -391,14 +520,17 @@ int walk(char* path, unsigned int max_n_threads) {
     int i, j, status, thread_i;
     char* temppath = malloc(MAXPATHLEN);
     bool insert, process;
-    long long unsigned int audit_size;
+    long long unsigned int audit_size, grand_total=0;
     long long unsigned int sizes[MAXGIDS];
     long long unsigned int **data;
     unsigned int gids[MAXGIDS];
     unsigned int n_subdirs = 0, subdir_count=1, n_groups = 0;
-    
-    if((status=get_n_subdirs(path, &n_subdirs)) != 0)
+    struct inode_entry *table[INODETABLE];
+
+    if((status=get_n_subdirs(path, &n_subdirs)) != 0) {
+        exit_status = 1;
         return 1;
+    }
  
     // Allocate results for number of subdirs
     // plus 1, because we store the result for ./
@@ -414,6 +546,7 @@ int walk(char* path, unsigned int max_n_threads) {
     if(dp == NULL) {
         store_error(path, strerror(errno));
         free(temppath);
+        exit_status = 1;
         return 1;
     }
 
@@ -423,14 +556,22 @@ int walk(char* path, unsigned int max_n_threads) {
         sizes[i] = 0;
     }
 
+    // Fill the inode lookup table with default values
+    for(i=0;i<INODETABLE;i++) {
+        table[i] = NULL;
+    }
+
     // Fill thread ID pointers with NULL
     for(i=0;i<max_n_threads;i++)
         thread_ids[i] = NULL;
 
     while((entry=readdir(dp))) {
-        // Skip navigational entries
-        if(strcmp(".", entry->d_name) == 0 || strcmp("..", entry->d_name) == 0)
+        // Skip parent navigational entry
+        if(strcmp("..", entry->d_name) == 0)
             continue;
+
+        if(exit_now)
+            return 1;
 
         // Get the file metadata
         sprintf(temppath, "%s/%s", path, entry->d_name);
@@ -455,12 +596,25 @@ int walk(char* path, unsigned int max_n_threads) {
             case S_IFDIR:
                 if(verbose)
                     printf("entry: Processing directory %s\n", temppath);
-                process = true;
+                if(strcmp(".", entry->d_name) == 0)
+                    insert = true;
+                else
+                    process = true;
                 break;
             default:
                 if(verbose)
                     printf("entry: Skipping file %s\n", temppath);
         }
+
+        // Skip inodes that have been previously visited
+        if((insert || process) && (meta.st_nlink > 1)) {
+            if((i=insert_inode(meta.st_ino, table)) != 0) {
+                insert = false;
+		process = false;
+                if(verbose)
+                    printf("-inode   %s inode %llu has already been counted\n", temppath, meta.st_ino);
+            }
+        } 
 
         // Update the running usage in the hash table
         if(insert) {
@@ -472,7 +626,7 @@ int walk(char* path, unsigned int max_n_threads) {
 
             if(insert_or_update(meta.st_gid, audit_size, gids, sizes) != 0) {
                 store_error(temppath, "entry: GID table overflowed");
-                return 2;
+                return 1;
             }
         }
 
@@ -491,20 +645,30 @@ int walk(char* path, unsigned int max_n_threads) {
         }
     }
     free(temppath);
+    free_inode_table(table);
     closedir(dp);
 
     // Wait for all threads to finish
     tr_finalize(thread_ids, max_n_threads);
 
-    // Compile the local result
+    // If any failures, return
+    if(exit_status != 0)
+        return 1;
+
+    // Add usage from the target directory to the full result
     init_result(&descendents[0], path);
     pack_result(descendents[0], gids, sizes);
 
+    // Add summary
+    init_result(&descendents[n_subdirs+1], "totals");
+    if((i=add_summary(descendents, n_subdirs+2, &grand_total)) != 0)
+        return 1;
+
     // Output result
-    output_json(descendents, n_subdirs+1);
+    output_json(descendents, n_subdirs+2, grand_total);
 
     // Cleanup
-    for(i=0;i<n_subdirs+1;i++) {
+    for(i=0;i<n_subdirs+2;i++) {
         free_result(&descendents[i]);
     }
 
@@ -519,6 +683,7 @@ int usage() {
     printf("    -j  Output result in JSON format (default is plain text)\n");
     printf("    -m  Maximum errors before terminating (default is 128)\n");
     printf("    -n  Output group names (default output uses gids)\n");
+    printf("    -t  Set number of threads to use (default is 4)\n");
     printf("    -v  Output information about each file encountered\n");
     printf("\n");
     return 0;
@@ -526,7 +691,7 @@ int usage() {
 
 int main(int argc, char** argv) {
     int i;
-    char *paths[2] = {NULL, NULL};   
+    char *path;   
     char c; 
 
     // If run with no arguments, output usage
@@ -534,7 +699,7 @@ int main(int argc, char** argv) {
         return usage();
 
     // Parse arguments
-    while((c = getopt(argc, argv, "hjvnbm:")) != -1) {
+    while((c = getopt(argc, argv, "hjvnbm:t:")) != -1) {
         switch(c) {
             case 'm':
                 max_errors = parse_num(optarg);
@@ -558,6 +723,13 @@ int main(int argc, char** argv) {
             case 'h':
                 usage();
                 return 0;
+            case 't':
+                n_threads = parse_num(optarg);
+                if(n_threads < 0 || n_threads > 16) {
+                    printf("Value for -t %s was not in range [0,16]\n", optarg);
+                    return 1;
+                }
+                break;
         }
     }
 
@@ -566,23 +738,25 @@ int main(int argc, char** argv) {
         printf("Path argument is required! Review usage with -h\n");
         return 1;
     }
-    paths[0] = argv[optind];
+    path = argv[optind];
     if(verbose)
-        printf("Auditing directory %s\n", paths[0]);
+        printf("Auditing directory %s\n", path);
 
     // Initialize error string to requested
     // number of pointers
     error_strs = malloc(max_errors*sizeof(char*));
 
     // Compile the usage by group under path
-    i = walk(paths[0], 2);
-    if(i == 2) {
-        printf("The number of groups encountered exceeded the maximum value of %u\n", MAXGIDS);
-        return 2;
-    }
-    else if(i == 3) {
-        printf("The maximum number of errors %d was exceeded\n", max_errors);
-        return 3;
+    i = walk(path, n_threads);
+    if(i > 0) {
+        for(i=0;i<n_errors;i++)
+            printf("error: %s\n", error_strs[i]);
+        if(exit_status == 1)
+            printf("The argument directory %s could not be opened\n", path);
+        else if(exit_status == 2) 
+            printf("The number of groups encountered exceeded the maximum value of %u\n", MAXGIDS);
+        else if(exit_status == 3)
+            printf("The maximum number of errors %d was exceeded\n", max_errors);
     }
 
     // Cleanup
@@ -591,6 +765,6 @@ int main(int argc, char** argv) {
     }
     free(error_strs);
 
-    return 0;
+    return exit_status;
 }
 
