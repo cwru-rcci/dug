@@ -17,24 +17,36 @@
 
 extern errno;
 volatile bool exit_now = false;
-bool  verbose = false, json = false, output_names = false, size_in_blocks = false;
+bool  verbose = false, json = false, output_names = false, size_in_blocks = true;
 int   max_errors = 128, n_errors = 0, n_threads = 4;
 volatile int exit_status = 0;
 char  **error_strs;
 
+// Mutex to lock error table on insert
 pthread_mutex_t error_mutex;
 
+// Struct to hold inode linked-list entry
 struct inode_entry {
     long long unsigned int num;
     void* next;
 };
 
+// Struct to hold arguments passed to threads
 struct tr_args {
     char* path;
     int** n_results;
     unsigned long long **data;
 };
 
+/* SYNOPSIS
+ *   Convenience routine to parse a command line argument to a positive integer
+ *
+ * ARGUMENTS
+ *   char* arg : The character data to parse to integer
+ *
+ * RETURNS
+ *   int : >=0 on success, -1 on error
+ */
 int parse_num(char* arg) {
     errno = 0;
     char* end;
@@ -51,6 +63,22 @@ int parse_num(char* arg) {
     return (int)i; 
 }
 
+/* SYNOPSIS
+ *   Find the index where the argument GID is stored in the GID table. This
+ *   operation uses hashing to locate an initial location and then searches
+ *   forward incrementally to find the actual position. If the GID is not
+ *   found the index where it should be inserted is returned.
+ *
+ * ARGUMENT
+ *   int gid : The GID to locate
+ *   unsigned int gids[] : The GID array to search
+ *
+ * RETURNS
+ *   int : >=0 on success, -1 on error
+ *
+ * COMMENTS
+ *   Not thread safe
+ */
 int find_index(int gid, unsigned int gids[]) {
     int index = gid % MAXGIDS;
     int i = index;
@@ -70,15 +98,42 @@ int find_index(int gid, unsigned int gids[]) {
     return -1;
 }
 
+
+/* SYNOPSIS
+ *   Copy the group name corresponding to the argument GID to the argument
+ *   buffer. If the GID cannot be mapped to a name, the numeric GID is
+ *   copied to the buffer as a string.
+ *
+ * ARGUMENT
+ *   unsigned int gid : The GID to map to a name
+ *   char* name : Buffer to copy the name to
+ *
+ * RETURNS
+ *   0 on success, 1 if the GID could not be mapped
+ */
 int get_name(unsigned int gid, char* name) {
     struct group *grp = getgrgid(gid); 
-    if(grp == NULL)
+    if(grp == NULL) {
         sprintf(name, "%u", gid);
-    else
+        return 1;
+    }
+    else {
         sprintf(name, "%s", grp->gr_name);
-    return 0;
+        return 0;
+    }
 }
 
+
+/* SYNOPSIS
+ *   Adds an inode to the database if it does not exist
+ *
+ * ARGUMENT
+ *   long long unsigned int num : inode number
+ *   struct inode_entry* table[] : inode database
+ *
+ * RETURN
+ *   0 if the inode was added, 1 if it already existed
+ */
 int insert_inode(long long unsigned int num, struct inode_entry* table[]) {
     int index = num % INODETABLE;
     struct inode_entry *entry = table[index];
@@ -113,6 +168,16 @@ int insert_inode(long long unsigned int num, struct inode_entry* table[]) {
     return 0;
 }
 
+
+/* SYNOPSIS
+ *   Frees the memory allocated to tracking inodes
+ *
+ * ARGUMENT
+ *   struct inode_entry* table[] : inode database
+ *
+ * RETURN
+ *   Always 0
+ */
 int free_inode_table(struct inode_entry* table[]) {
     int i;
     struct inode_entry *entry, *next;
@@ -131,6 +196,19 @@ int free_inode_table(struct inode_entry* table[]) {
     return 0;
 }
 
+/* SYNOPSIS
+ *   Add a new GID to the group database with intial size, or upadate an 
+ *   existing entry
+ *
+ * ARGUMENT
+ *   unsigned int gid : GID to insert/update
+ *    long long unsigned int size : size for initialization or increment
+ *    unsigned int gids[]: GID database
+ *    long long unsigned int sizes[]: Size database
+ *
+ * RETURN
+ *   0 on success, 1 if the database is full and the GID cannot be inserted
+ */
 int insert_or_update(unsigned int gid, long long unsigned int size, unsigned int gids[], long long unsigned int sizes[]) {
     int index = find_index(gid, gids);
     if(index == -1) {
@@ -142,6 +220,17 @@ int insert_or_update(unsigned int gid, long long unsigned int size, unsigned int
     return 0;
 }
 
+
+/* SYNOPSIS
+ *   Store an error message
+ *
+ * ARGUMENT
+ *   char* path : The file/directory path where the error was encountered
+ *   char* error : The error message
+ *
+ * RETURN
+ *   0 on success, 1 if the maximum number of errors has been exceeded
+ */
 int store_error(char* path, char* error) {
     if(n_errors >= max_errors) {
         exit_now = true;
@@ -162,12 +251,81 @@ int store_error(char* path, char* error) {
     return 0;
 }
 
+
+/* SYNOPSIS
+ *   Escape/remove special characters so the string is a valid JSON string
+ *
+ * ARGUMENT
+ *   char* path : The initial string
+ *   char* escaped : Buffer to hold the escaped string
+ *
+ * RETURN
+ *   Always 0
+ */
+int json_escape_str(char* path, char* escaped) {
+    int len = strlen(path);
+    int i,j=0;
+    for(i=0;i<len;i++) {
+        if(path[i] == '\\') {
+            escaped[j] = '\\';
+            escaped[j+1] = '\\';
+            j+=2; 
+        }
+        else if(path[i] == '\n' || path[i] == '\r' || path[i] == '\b') {
+            escaped[j] = '_';
+            j+=1;
+        }
+        else {
+            escaped[j] = path[i];
+            j+=1;
+        }   
+    }
+    escaped[j] = '\0';
+    return 0;
+}
+
+
+/* SYNOPSIS
+ *   If the command failed, outputs a JSON formatted failure
+ *
+ * ARGUMENT
+ *   None
+ *
+ * RETURN
+ *   Always 0
+ */
+int json_output_failure() {
+    int i;
+
+    printf("{\n  \"failure\": true,\n  \"errors\": [\n");
+    for(i=0;i<n_errors;i++) {
+        if(i > 0)
+            printf(",\n");
+        printf("    \"%s\"", error_strs[i]);
+    }
+    printf("\n  ]\n}\n");
+
+    return 0;
+}
+
+
+/* SYNOPSIS
+ *   Outputs the result of the command as a JSON object
+ *
+ * ARGUMENT
+ *   void* results : Results database
+ *   int n_results : Number of results
+ *   long long unsigned int total: The total use across all files in result
+ *
+ * RETURN
+ *   Always 0
+ */
 int output_json(void* results, int n_results, long long unsigned int total) {
     struct tr_args **descendents = results;
     int i, j;
     int out_dir = 0, out_size = 0;
     unsigned long long int gid, size;
-    char* name_buffer = malloc(2048);
+    char* name_buffer = malloc(MAXPATHLEN);
     printf("{\n  \"errors\": [\n");
     
     for(i=0;i<n_errors;i++) {
@@ -182,7 +340,8 @@ int output_json(void* results, int n_results, long long unsigned int total) {
             printf(",\n");
         out_dir += 1;
 
-        printf("    \"%s\": {\n", descendents[i]->path);
+        json_escape_str(descendents[i]->path, name_buffer);
+        printf("    \"%s\": {\n", name_buffer);
         for(j=0;j<**(descendents[i]->n_results)*2;j+=2) {
             gid = (*(descendents[i]->data))[j];
             size = (*(descendents[i]->data))[j+1];
@@ -223,6 +382,17 @@ int output_json(void* results, int n_results, long long unsigned int total) {
     return 0;
 }
 
+/* SYNOPSIS:
+ *   Initialize a new empty result
+ *
+ * ARGUMENT
+ *   struct tr_args **result : Point to an address where we will initialize the
+ *                             result 
+ *   char* dir : The file/directory path associated with the result
+ *
+ * RETURN
+ *   Void
+ */
 void init_result(struct tr_args **result, char* dir) {
     (*result) = (struct tr_args*)malloc(sizeof(struct tr_args));
     (*result)->path = malloc(strlen(dir)+1);
@@ -231,6 +401,16 @@ void init_result(struct tr_args **result, char* dir) {
     (*result)->data = (long long unsigned int**)malloc(sizeof(long long unsigned int**));
 }
 
+
+/* SYNOPSIS
+ *   Free the memory allocated to a result
+ *
+ * ARGUMENT
+ *   struct tr_args **result : Pointer to the address of a result
+ *
+ * RETURN
+ *   Void 
+ */
 void free_result(struct tr_args **result) {
   free(*((*result)->data));
   free((*result)->data);
@@ -240,6 +420,18 @@ void free_result(struct tr_args **result) {
   free(*result);
 }
 
+
+/* SYNOPSIS
+ *   Copies the database of storage-by-gid into a result structure. The
+ *   method interleaves the arrays of gid[] and size[] into a single
+ *   array of pairs
+ * ARGUMENT
+ *   struct tr_args *result : Address of result to populate
+ *   unsigned int gids[]: GIDs of groups that were encountered
+ *   long long unsigned int sizes[]: Storage usage for each GID encountered
+ * RETURN
+ *   Void
+ */
 void pack_result(struct tr_args *result, unsigned int gids[], long long unsigned int sizes[]) {
     int n_groups = 0;
     int i, j;
@@ -264,6 +456,16 @@ void pack_result(struct tr_args *result, unsigned int gids[], long long unsigned
     }
 }
 
+/* SYNOPSIS
+ *   Iterates over all results generated to compile a summaru of total
+ *   usage by group
+ * ARGUMENT
+ *   void* tstructs: A pointer to the array or results
+ *   int n_results: The number of results in the array
+ *   long long unsigned int *total: Address where a grand total is stored
+ * RETURN
+ *   0 on success, 1 on failure
+ */
 int add_summary(void* tstructs, int n_results, long long unsigned int *total) {
     struct tr_args **results = tstructs;
     int i, j;
@@ -291,6 +493,18 @@ int add_summary(void* tstructs, int n_results, long long unsigned int *total) {
     return 0;
 }
 
+
+/* SYNOPSIS
+ *   Compiles a summary of file usage in a directory and all descendents,
+ *   organized by group (GID). The method is designed to be launched as 
+ *   a thread.
+ * ARGUMENT:
+ *  void *arg : Thread argument that stores the path to traverse, along
+ *              with pointers to addresses where the result will be
+ *              stored when the method completes
+ * RETURN
+ *   char* status: "OK" on success, and other strings on error
+ */
 static void* fts_walk(void *arg) {
     FTS *stream;
     FTSENT *entry;
@@ -305,6 +519,8 @@ static void* fts_walk(void *arg) {
     int** n_results = targs->n_results;
     long long unsigned int **data = targs->data;
     char* path = targs->path;
+    bool store_device = true;
+    dev_t fs_dev;
 
     // FTS needs a null-terminated list of paths as argument
     char *paths[2] = {path, NULL};
@@ -315,24 +531,39 @@ static void* fts_walk(void *arg) {
     }
 
     // Fil the group/usage hash table with initialization values
+    // We use UINT_MAX for uninitialized GID because root GID is 0
+    // We use 0 for uninitialized size so that we can update using +=
     for(i=0;i<MAXGIDS;i++) {
         gids[i] = UINT_MAX;
         sizes[i] = 0;
     }
 
-    // Fill the inode lookup table with default values
+    // Fill the inode lookup table with NULL to indicate empty for all entries 
     for(i=0;i<INODETABLE;i++) {
         table[i] = NULL;
     }
 
+    // Read from the FTS stream until it is empty
     while((entry=fts_read(stream))) {
+        // FTS error, entry was null. We store the error and continue,
+        // but this increments number of errors and potentially sets
+        // exit_now=true if maximum errors is reached
         if(entry == NULL) {
             store_error("fts_error", strerror(errno));
             continue;
         }
 
+        // If maximum errors were encountered, or other unrecoverable
+        // errors occured, this indicates to terminate execution
         if(exit_now)
             return "TASKEXIT";
+
+        // We want to enforce that all files are on the same device, so
+        // we store the device for the first file encountered
+        if(store_device) {
+            fs_dev = entry->fts_statp->st_dev;
+            store_device = false;
+        }
 
         // Process the file or directory
         insert = false;
@@ -350,12 +581,12 @@ static void* fts_walk(void *arg) {
                 break;
             case FTS_SL:
                 if(verbose)
-                    printf("+symink    %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
+                    printf("+symlnk    %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
             case FTS_SLNONE:
                 if(verbose)
-                    printf("+brksymink %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
+                    printf("+brksymlnk %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
             case FTS_DEFAULT:
@@ -392,6 +623,14 @@ static void* fts_walk(void *arg) {
             }
         }
 
+        // Skip files on different device
+        if(entry->fts_statp->st_dev != fs_dev) {
+            if((store_error(entry->fts_path, "File is on another device")) != 0) {
+                return "MAXERRORS";
+            }
+            continue;
+        }
+
         // Skip inodes that have been previously visited
 	if(insert && (entry->fts_statp->st_nlink > 1)) {
 	    if((i=insert_inode(entry->fts_statp->st_ino, table)) != 0) {
@@ -406,9 +645,10 @@ static void* fts_walk(void *arg) {
             // Compute size as either file size, or size of
             // blocks the file spans
             audit_size = entry->fts_statp->st_size;
-            if(size_in_blocks)
+            if(size_in_blocks) {
                 audit_size = entry->fts_statp->st_blocks*512;
- 
+            }
+
             if(insert_or_update(entry->fts_statp->st_gid, audit_size, gids, sizes) != 0) {
                 store_error(entry->fts_path, "GID table overflowed");
                 return "GID_OVERFLOW";
@@ -423,6 +663,15 @@ static void* fts_walk(void *arg) {
     return "OK";
 }
 
+/* SYNOPSIS
+ *   Scans an argument directory to determine the number of subdirectories
+ *   within it.
+ * ARGUMENT
+ *   char* path : The directory to scan
+ *   unsigned int *n_subdirs : Address where the count is stored
+ * RETURN
+ *   0 on success, 1 on error
+ */
 int get_n_subdirs(char* path, unsigned int *n_subdirs) {
     DIR *dp;
     struct dirent *entry;
@@ -460,6 +709,15 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs) {
     return 0;
 }
 
+
+/* SYNOPSIS
+ *   Sweeps an array of thread ids and attempts to join active threads
+ * ARGUMENT
+ *   pthread_t *thread_ids[] : Thread ids to sweep
+ *   unsigned int max_n_threads : Length of thread id array
+ * RETURN
+ *   -1 if no threads were joined, index of first joined thread otherwise
+ */
 int tr_recover_slots(pthread_t *thread_ids[], unsigned int max_n_threads) {
     int i, status, n=-1;
     for(i=0;i<max_n_threads;i++) {
@@ -477,6 +735,15 @@ int tr_recover_slots(pthread_t *thread_ids[], unsigned int max_n_threads) {
     return n;
 }
 
+/* SYNOPSIS
+ *   Find the index of an empty array element where a thread id can be stored.
+ *   The method polls until an element becomes available.
+ * ARGUMENT
+ *   pthread_t *thread_ids[] : Array of thread ids
+ *   unsigned int max_n_threads : Length of thread id array
+ * RETURN
+ *   The index of the available element
+ */
 int tr_find_slot(pthread_t *thread_ids[], unsigned int max_n_threads) {
     int i, status;
     int slot = -1;
@@ -499,8 +766,16 @@ int tr_find_slot(pthread_t *thread_ids[], unsigned int max_n_threads) {
     }
 }
 
+/* SYNOPSIS
+ *   Waits for and joins all threads with ids in the argument array.
+ * ARGUMENT
+ *   pthread_t *thread_ids[] : Array of thread ids
+ *   unsigned int max_n_threads : Length of thread id array
+ * RETURN
+ *   0 if all join are successful, number of of joins that failed otherwise
+ */
 int tr_finalize(pthread_t *thread_ids[], unsigned int max_n_threads) {
-    int i, status, n=-1;
+    int i, status, n=0;
     for(i=0;i<max_n_threads;i++) {
         if(thread_ids[i] == NULL)
             continue;
@@ -508,11 +783,21 @@ int tr_finalize(pthread_t *thread_ids[], unsigned int max_n_threads) {
         status = pthread_join(*thread_ids[i], NULL);
         if(status != 0)
             printf("tr   :Error in pthread_join(): %s\n", strerror(errno));
+	n += status;
         free(thread_ids[i]);
     }
     return n;
 }
 
+/* SYNOPSIS
+ *   Inventories the usage in this directory and all subdirectories, organized
+ *   by path and groups (gids).
+ * ARGUMENT:
+ *   char* path : The path to the top level directory of the search
+ *   unsigned int max_n_threads : The number of threads to use for the search
+ * RETURN
+ *   0 on success, 1 on failure
+ */
 int walk(char* path, unsigned int max_n_threads) {
     DIR *dp;
     struct dirent *entry;
@@ -675,10 +960,17 @@ int walk(char* path, unsigned int max_n_threads) {
     return 0;
 }
 
+/* SYNOPSIS
+ *   Outputs usage information for the command
+ * ARGUMENT
+ *   None
+ * RETURN
+ *   Always 0
+ */
 int usage() {
     printf("USAGE: dug [OPTIONS] <directory>\n\n");
     printf("OPTIONS\n");
-    printf("    -b  Compute size of blocks occupied (default is file sizes)\n");
+    printf("    -b  Compute apparent size (default is size of blocks occupied)\n");
     printf("    -h  Display help information\n");
     printf("    -j  Output result in JSON format (default is plain text)\n");
     printf("    -m  Maximum errors before terminating (default is 128)\n");
@@ -689,6 +981,13 @@ int usage() {
     return 0;
 }
 
+/* SYNOPSIS
+ *   Entry point for command
+ * ARGUMENT
+ *   Standard command line input arguments
+ * RETURN
+ *   0 on success, error code on failure
+ */
 int main(int argc, char** argv) {
     int i;
     char *path;   
@@ -718,7 +1017,7 @@ int main(int argc, char** argv) {
 	        output_names = true;
 	        break;
             case 'b':
-                size_in_blocks = true;
+                size_in_blocks = false;
                 break; 
             case 'h':
                 usage();
@@ -749,14 +1048,12 @@ int main(int argc, char** argv) {
     // Compile the usage by group under path
     i = walk(path, n_threads);
     if(i > 0) {
-        for(i=0;i<n_errors;i++)
-            printf("error: %s\n", error_strs[i]);
-        if(exit_status == 1)
-            printf("The argument directory %s could not be opened\n", path);
-        else if(exit_status == 2) 
-            printf("The number of groups encountered exceeded the maximum value of %u\n", MAXGIDS);
-        else if(exit_status == 3)
-            printf("The maximum number of errors %d was exceeded\n", max_errors);
+        if(json) 
+            json_output_failure();
+        else {
+            for(i=0;i<n_errors;i++)
+                printf("error: %s\n", error_strs[i]);
+        }
     }
 
     // Cleanup
