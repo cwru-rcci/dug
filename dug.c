@@ -7,6 +7,7 @@
 #include<string.h>
 #include<unistd.h>
 #include<grp.h>
+#include<pwd.h>
 #include<fts.h>
 #include<pthread.h>
 #include<sys/stat.h>
@@ -17,7 +18,7 @@
 
 extern errno;
 volatile bool exit_now = false;
-bool  verbose = false, json = false, output_names = false, size_in_blocks = true;
+bool  verbose = false, json = false, output_names = false, size_in_blocks = true, summarize_by_user = false;
 int   max_errors = 128, n_errors = 0, n_threads = 4;
 volatile int exit_status = 0;
 char  **error_strs;
@@ -112,14 +113,27 @@ int find_index(int gid, unsigned int gids[]) {
  *   0 on success, 1 if the GID could not be mapped
  */
 int get_name(unsigned int gid, char* name) {
-    struct group *grp = getgrgid(gid); 
-    if(grp == NULL) {
-        sprintf(name, "%u", gid);
-        return 1;
+    if(summarize_by_user) {
+        struct passwd *usr = getpwuid(gid);
+        if(usr == NULL) {
+            sprintf(name, "%u", gid);
+            return 1;
+        }
+        else {
+            sprintf(name, "%s", usr->pw_name);
+            return 0;
+        }
     }
     else {
-        sprintf(name, "%s", grp->gr_name);
-        return 0;
+        struct group *grp = getgrgid(gid); 
+        if(grp == NULL) {
+            sprintf(name, "%u", gid);
+            return 1;
+        }
+        else {
+            sprintf(name, "%s", grp->gr_name);
+            return 0;
+        }
     }
 }
 
@@ -305,6 +319,61 @@ int json_output_failure() {
     }
     printf("\n  ]\n}\n");
 
+    return 0;
+}
+
+
+/* SYNOPSIS
+ *   Output result in plain text format
+ *
+ * ARGUMENT
+ *   void* results : Results database
+ *   int n_results : Number of results
+ *   long long unsigned int total: The total use across all files in result
+ *
+ * RETURN
+ *   Always 0
+ */
+int output_table(void* results, int n_results, long long unsigned int total) {
+    struct tr_args **descendents = results;
+    int i, j;
+    int out_dir = 0, out_size = 0;
+    unsigned long long int gid, size;
+    char* name_buffer = malloc(MAXPATHLEN);
+    if(n_errors > 0) {
+        printf("=================== Errors ===================\n");
+        for(i=0;i<n_errors;i++)
+            printf("%s\n", error_strs[i]);
+        printf("\n\n");
+    }
+   
+    printf("=================== Sub Directories ====================\n"); 
+    for(i=0;i<n_results-1;i++) {
+        json_escape_str(descendents[i]->path, name_buffer);
+        printf("%s\n", name_buffer);
+        for(j=0;j<**(descendents[i]->n_results)*2;j+=2) {
+            gid = (*(descendents[i]->data))[j];
+            size = (*(descendents[i]->data))[j+1];
+            if(output_names)
+                get_name(gid, name_buffer);
+            else
+                sprintf(name_buffer, "%u", gid);
+            printf("%s\t%llu\n", name_buffer, size);
+        }
+        printf("\n");
+    }
+    printf("\n\n=================== Summaries ===================\n");
+    for(j=0;j<**(descendents[n_results-1]->n_results)*2;j+=2) {
+        gid = (*(descendents[n_results-1]->data))[j];
+        size = (*(descendents[n_results-1]->data))[j+1];
+        if(output_names)
+            get_name(gid, name_buffer);
+        else
+            sprintf(name_buffer, "%u", gid);
+        printf("%s\t%llu\n", name_buffer, size);
+    }
+    printf("Total\t%llu\n", total);
+    free(name_buffer);
     return 0;
 }
 
@@ -513,6 +582,7 @@ static void* fts_walk(void *arg) {
     bool error = false;
     long long unsigned int audit_size;
     long long unsigned int sizes[MAXGIDS];
+    unsigned int id;
     unsigned int gids[MAXGIDS];
     struct inode_entry *table[INODETABLE];
     struct tr_args *targs = arg;
@@ -649,7 +719,11 @@ static void* fts_walk(void *arg) {
                 audit_size = entry->fts_statp->st_blocks*512;
             }
 
-            if(insert_or_update(entry->fts_statp->st_gid, audit_size, gids, sizes) != 0) {
+            id = entry->fts_statp->st_gid;
+            if(summarize_by_user)
+                id = entry->fts_statp->st_uid;
+
+            if(insert_or_update(id, audit_size, gids, sizes) != 0) {
                 store_error(entry->fts_path, "GID table overflowed");
                 return "GID_OVERFLOW";
             }
@@ -809,10 +883,24 @@ int walk(char* path, unsigned int max_n_threads) {
     long long unsigned int sizes[MAXGIDS];
     long long unsigned int **data;
     unsigned int gids[MAXGIDS];
+    unsigned int id;
     unsigned int n_subdirs = 0, subdir_count=1, n_groups = 0;
     struct inode_entry *table[INODETABLE];
 
+
+    // Find the number of sub-directories under the root
+    // path
     if((status=get_n_subdirs(path, &n_subdirs)) != 0) {
+        exit_status = 1;
+        return 1;
+    }
+
+    // Open the directory to enumerate files, returning
+    // if an error is encountered
+    dp = opendir(path);
+    if(dp == NULL) {
+        store_error(path, strerror(errno));
+        free(temppath);
         exit_status = 1;
         return 1;
     }
@@ -826,27 +914,21 @@ int walk(char* path, unsigned int max_n_threads) {
     }
     pthread_t *thread_ids[max_n_threads];
 
-
-    dp = opendir(path);
-    if(dp == NULL) {
-        store_error(path, strerror(errno));
-        free(temppath);
-        exit_status = 1;
-        return 1;
-    }
-
-    // Fil the hash table with initialization values
+    // Fill the hash table with initialization values
+    // so we can identify empty slots
     for(i=0;i<MAXGIDS;i++) {
         gids[i] = UINT_MAX;
         sizes[i] = 0;
     }
 
-    // Fill the inode lookup table with default values
+    // Fill the inode lookup table with default value
+    // NULL so we can identify empty slots
     for(i=0;i<INODETABLE;i++) {
         table[i] = NULL;
     }
 
-    // Fill thread ID pointers with NULL
+    // Initialize thread ID pointers to NULL so we 
+    // can identify unused slots
     for(i=0;i<max_n_threads;i++)
         thread_ids[i] = NULL;
 
@@ -909,7 +991,11 @@ int walk(char* path, unsigned int max_n_threads) {
             if(size_in_blocks)
                 audit_size = meta.st_blocks*512;
 
-            if(insert_or_update(meta.st_gid, audit_size, gids, sizes) != 0) {
+            id = meta.st_gid;
+            if(summarize_by_user)
+                id = meta.st_uid;
+
+            if(insert_or_update(id, audit_size, gids, sizes) != 0) {
                 store_error(temppath, "entry: GID table overflowed");
                 return 1;
             }
@@ -950,7 +1036,10 @@ int walk(char* path, unsigned int max_n_threads) {
         return 1;
 
     // Output result
-    output_json(descendents, n_subdirs+2, grand_total);
+    if(json)
+        output_json(descendents, n_subdirs+2, grand_total);
+    else
+        output_table(descendents, n_subdirs+2, grand_total);
 
     // Cleanup
     for(i=0;i<n_subdirs+2;i++) {
@@ -976,6 +1065,7 @@ int usage() {
     printf("    -m  Maximum errors before terminating (default is 128)\n");
     printf("    -n  Output group names (default output uses gids)\n");
     printf("    -t  Set number of threads to use (default is 4)\n");
+    printf("    -u  Summarize usage by owner (default is summarize by group)\n");
     printf("    -v  Output information about each file encountered\n");
     printf("\n");
     return 0;
@@ -998,7 +1088,7 @@ int main(int argc, char** argv) {
         return usage();
 
     // Parse arguments
-    while((c = getopt(argc, argv, "hjvnbm:t:")) != -1) {
+    while((c = getopt(argc, argv, "hjvnbum:t:")) != -1) {
         switch(c) {
             case 'm':
                 max_errors = parse_num(optarg);
@@ -1019,6 +1109,9 @@ int main(int argc, char** argv) {
             case 'b':
                 size_in_blocks = false;
                 break; 
+            case 'u':
+                summarize_by_user = true;
+                break;
             case 'h':
                 usage();
                 return 0;
