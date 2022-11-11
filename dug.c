@@ -17,11 +17,42 @@
 #define INODETABLE 16384 
 
 extern errno;
+
+// triggers all threads to stop before completing
 volatile bool exit_now = false;
-bool  verbose = false, json = false, output_names = false, size_in_blocks = true, summarize_by_user = false;
-int   max_errors = 128, n_errors = 0, n_threads = 4;
+
+// Output information about each file/directory encountered
+bool verbose = false;
+
+// Output information for debugging execution
+bool trace = false;
+
+// Output result in json format
+bool json = false;
+
+// Resolve GIDs to group names in output 
+bool output_names = false;
+
+// Summarize the usage by UID rather than GID
+bool summarize_by_user = false;
+
+// Compute size in blocks occupied rather than actual file size
+bool size_in_blocks = true;
+
+// Maximum number of errors to encounter before giving up
+int max_errors = 128;
+
+// Number of errors encountered so far
+int n_errors = 0;
+
+// Number of threads to use
+int n_threads = 4;
+
+// Exit status. Volitile because it can be set in any thread.
 volatile int exit_status = 0;
-char  **error_strs;
+
+// Error strings are stored here to include in output
+char **error_strs;
 
 // Mutex to lock error table on insert
 pthread_mutex_t error_mutex;
@@ -157,7 +188,7 @@ int insert_inode(long long unsigned int num, struct inode_entry* table[]) {
         entry = malloc(sizeof(struct inode_entry));
         entry->num = num;
         entry->next = NULL;
-	if(verbose)
+	if(trace)
             printf("Added new entry for inode %llu\n", num);
 	table[index] = entry;
 	return 0;
@@ -177,7 +208,7 @@ int insert_inode(long long unsigned int num, struct inode_entry* table[]) {
     entry->next = malloc(sizeof(struct inode_entry));
     ((struct inode_entry *)(entry->next))->num = num;
     ((struct inode_entry *)(entry->next))->next = NULL;
-    if(verbose)
+    if(trace)
         printf("Added LL node for inode %llu\n", num);
     return 0;
 }
@@ -358,11 +389,11 @@ int output_table(void* results, int n_results, long long unsigned int total) {
                 get_name(gid, name_buffer);
             else
                 sprintf(name_buffer, "%u", gid);
-            printf("%s\t%llu\n", name_buffer, size);
+            printf("%+24s  %llu\n", name_buffer, size);
         }
         printf("\n");
     }
-    printf("\n\n=================== Summaries ===================\n");
+    printf("\n=================== Summaries ===================\n");
     for(j=0;j<**(descendents[n_results-1]->n_results)*2;j+=2) {
         gid = (*(descendents[n_results-1]->data))[j];
         size = (*(descendents[n_results-1]->data))[j+1];
@@ -370,9 +401,9 @@ int output_table(void* results, int n_results, long long unsigned int total) {
             get_name(gid, name_buffer);
         else
             sprintf(name_buffer, "%u", gid);
-        printf("%s\t%llu\n", name_buffer, size);
+        printf("%+24s  %llu\n", name_buffer, size);
     }
-    printf("Total\t%llu\n", total);
+    printf("%+24s  %llu\n", "Total", total);
     free(name_buffer);
     return 0;
 }
@@ -526,10 +557,10 @@ void pack_result(struct tr_args *result, unsigned int gids[], long long unsigned
 }
 
 /* SYNOPSIS
- *   Iterates over all results generated to compile a summaru of total
+ *   Iterates over all results generated to compile a summary of total
  *   usage by group
  * ARGUMENT
- *   void* tstructs: A pointer to the array or results
+ *   void* tstructs: A pointer to the array oif results
  *   int n_results: The number of results in the array
  *   long long unsigned int *total: Address where a grand total is stored
  * RETURN
@@ -548,6 +579,10 @@ int add_summary(void* tstructs, int n_results, long long unsigned int *total) {
         sizes[i] = 0;
     }
 
+    // i<n_results-1 because the results of the target
+    // directory and sub-directories are in indices
+    // [0,n_results-2] and the summary is stored at
+    // index n_results-1
     for(i=0;i<n_results-1;i++) {
         for(j=0;j<**(results[i]->n_results)*2;j+=2) {
             gid = (*(results[i]->data))[j];
@@ -771,10 +806,8 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs) {
             continue;
         }
 
-        switch(meta.st_mode & S_IFMT) {
-            case S_IFDIR:
-                sd += 1;
-        }
+        if((meta.st_mode & S_IFMT) == S_IFDIR)
+            sd += 1;
     }
  
     *n_subdirs = sd;
@@ -908,8 +941,8 @@ int walk(char* path, unsigned int max_n_threads) {
     // Allocate results for number of subdirs
     // plus 1, because we store the result for ./
     // in position 0
-    struct tr_args *descendents[n_subdirs+1];
-    for(i=0;i<n_subdirs;i++) {
+    struct tr_args *descendents[n_subdirs+2];
+    for(i=0;i<n_subdirs+2;i++) {
         descendents[i] = NULL;
     }
     pthread_t *thread_ids[max_n_threads];
@@ -1030,7 +1063,7 @@ int walk(char* path, unsigned int max_n_threads) {
     init_result(&descendents[0], path);
     pack_result(descendents[0], gids, sizes);
 
-    // Add summary
+    // Add summary to full result
     init_result(&descendents[n_subdirs+1], "totals");
     if((i=add_summary(descendents, n_subdirs+2, &grand_total)) != 0)
         return 1;
@@ -1125,7 +1158,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Parse path, or exit if non specified
+    // Parse path, or exit if not specified
     if (optind >= argc) {
         printf("Path argument is required! Review usage with -h\n");
         return 1;
