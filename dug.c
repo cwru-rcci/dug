@@ -1,3 +1,23 @@
+/* Copyright (c) 2022 Case Western Reserve University
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 #include<stdio.h>
 #include<stdbool.h>
 #include<stdlib.h>
@@ -486,7 +506,7 @@ int output_json(void* results, int n_results, long long unsigned int total) {
  *   Initialize a new empty result
  *
  * ARGUMENT
- *   struct tr_args **result : Point to an address where we will initialize the
+ *   struct tr_args **result : Pointer to an address where we will initialize the
  *                             result 
  *   char* dir : The file/directory path associated with the result
  *
@@ -625,11 +645,17 @@ static void* fts_walk(void *arg) {
     long long unsigned int **data = targs->data;
     char* path = targs->path;
     bool store_device = true;
-    dev_t fs_dev;
 
     // FTS needs a null-terminated list of paths as argument
     char *paths[2] = {path, NULL};
-    stream = fts_open(paths, FTS_PHYSICAL|FTS_NOCHDIR, NULL);
+
+    // FTS_PHSYCIAL: do not follow symbolic links
+    // FTS_XDEV    : do not descend into directories on devices
+    //               that differ from the starting directory
+    // FTS_NOCHDIR : do not chdir into each sub-directory. This
+    //               allows us use multiple fts threads from 
+    //               one process
+    stream = fts_open(paths, FTS_PHYSICAL|FTS_XDEV|FTS_NOCHDIR, NULL);
     if(stream == NULL) {
         store_error(paths[0], strerror(errno));
         return "FTSOPENFAIL"; 
@@ -663,59 +689,62 @@ static void* fts_walk(void *arg) {
         if(exit_now)
             return "TASKEXIT";
 
-        // We want to enforce that all files are on the same device, so
-        // we store the device for the first file encountered
-        if(store_device) {
-            fs_dev = entry->fts_statp->st_dev;
-            store_device = false;
-        }
-
         // Process the file or directory
         insert = false;
         error = false;
         switch(entry->fts_info) {
+            // Regular file
             case FTS_F:
                 if(verbose)
                     printf("+file      %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
 		insert = true;
                 break;
+            // Directory
             case FTS_D:
                 if(verbose)
                     printf("+directory %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
+            // Symbolic link
             case FTS_SL:
                 if(verbose)
                     printf("+symlnk    %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
+            // Broken symlink
             case FTS_SLNONE:
                 if(verbose)
                     printf("+brksymlnk %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
+            // Uncategorized file
             case FTS_DEFAULT:
                 if(verbose)
                     printf("+uncat     %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
+            // A directory we could not descend into
             case FTS_DNR:
                 error = true;
                 break;
+            // A directory we already traversed in pre-order
             case FTS_DP:
                 // We already saw this directory in preorder FTS_D,
                 // so ignore it
                 break;
+            // A file we could not stat
             case FTS_NS:
                 if(verbose)
                     printf("-stat_err  %s %s\n", entry->fts_path, strerror(errno));
                 error = true;
                 break;
+            // Unclassified error
             case FTS_ERR:
                 if(verbose)
                     printf("-fts_err   %s\n", entry->fts_path);
                 error = true;
                 break;
+            // Nothing else matched, so log it as skipped in verbose mode
             default: 
                 if(verbose)
                     printf("-fts_skip  %s\n", entry->fts_path);
@@ -726,14 +755,6 @@ static void* fts_walk(void *arg) {
             if(store_error(entry->fts_path, strerror(entry->fts_errno)) != 0) {
                 return "MAXERRORS";
             }
-        }
-
-        // Skip files on different device
-        if(entry->fts_statp->st_dev != fs_dev) {
-            if((store_error(entry->fts_path, "File is on another device")) != 0) {
-                return "MAXERRORS";
-            }
-            continue;
         }
 
         // Skip inodes that have been previously visited
@@ -939,8 +960,9 @@ int walk(char* path, unsigned int max_n_threads) {
     }
  
     // Allocate results for number of subdirs
-    // plus 1, because we store the result for ./
-    // in position 0
+    // plus 2, because we store the result for 
+    // the target directory in position 0 and
+    // the summary in last array element
     struct tr_args *descendents[n_subdirs+2];
     for(i=0;i<n_subdirs+2;i++) {
         descendents[i] = NULL;
@@ -1096,7 +1118,7 @@ int usage() {
     printf("    -h  Display help information\n");
     printf("    -j  Output result in JSON format (default is plain text)\n");
     printf("    -m  Maximum errors before terminating (default is 128)\n");
-    printf("    -n  Output group names (default output uses gids)\n");
+    printf("    -n  Output group/user names (default output uses gids/uids)\n");
     printf("    -t  Set number of threads to use (default is 4)\n");
     printf("    -u  Summarize usage by owner (default is summarize by group)\n");
     printf("    -v  Output information about each file encountered\n");
