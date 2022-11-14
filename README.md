@@ -4,7 +4,8 @@
 `dug` is a utility similar to `du` that focuses on summarizing usage by group or owner. It is multi-threaded to support parallel walks of the file system, and supports output in JSON format to facilitate use in pipelines and scripts. The utility was developed to untangle quota usage in HPC environments where users belong to many groups that change over time. The resulting report outlines the total usage under the target directory (broken down by group and a grand total) and the usage by group under each sub-directory of the target.
 
 ## Installing
-The utility is intended for use on Linux operating systems, and the repository includes a Makefile authored to compile using GNU based development tools. The Makefile includes targets to build the production binary `make`, build a debug binary `make debug`, and remove and existing binaries `make clean`.
+The utility is intended for use on Linux operating systems, and the repository includes a Makefile authored to compile using GNU based development tools.
+The Makefile includes targets to build the production binary `make`, build a debug binary `make debug`, and remove existing binaries `make clean`.
 
 ## Usage
 ```
