@@ -127,9 +127,6 @@ int parse_num(char* arg) {
  *
  * RETURNS
  *   int : >=0 on success, -1 on error
- *
- * COMMENTS
- *   Not thread safe
  */
 int find_index(int gid, unsigned int gids[]) {
     int index = gid % MAXGIDS;
@@ -152,22 +149,22 @@ int find_index(int gid, unsigned int gids[]) {
 
 
 /* SYNOPSIS
- *   Copy the group name corresponding to the argument GID to the argument
- *   buffer. If the GID cannot be mapped to a name, the numeric GID is
- *   copied to the buffer as a string.
+ *   Copy the user/group name corresponding to the argument UID/GID to the 
+ *   argument buffer. If the UID/GID cannot be mapped to a name, the numeric
+ *   UID/GID is copied to the buffer as a string.
  *
  * ARGUMENT
- *   unsigned int gid : The GID to map to a name
+ *   unsigned int id : The UID/GID to map to a name
  *   char* name : Buffer to copy the name to
  *
  * RETURNS
  *   0 on success, 1 if the GID could not be mapped
  */
-int get_name(unsigned int gid, char* name) {
+int get_name(unsigned int id, char* name) {
     if(summarize_by_user) {
-        struct passwd *usr = getpwuid(gid);
+        struct passwd *usr = getpwuid(id);
         if(usr == NULL) {
-            sprintf(name, "%u", gid);
+            sprintf(name, "%u", id);
             return 1;
         }
         else {
@@ -176,9 +173,9 @@ int get_name(unsigned int gid, char* name) {
         }
     }
     else {
-        struct group *grp = getgrgid(gid); 
+        struct group *grp = getgrgid(id); 
         if(grp == NULL) {
-            sprintf(name, "%u", gid);
+            sprintf(name, "%u", id);
             return 1;
         }
         else {
@@ -388,7 +385,6 @@ int json_output_failure() {
 int output_table(void* results, int n_results, long long unsigned int total) {
     struct tr_args **descendents = results;
     int i, j;
-    int out_dir = 0, out_size = 0;
     unsigned long long int gid, size;
     char* name_buffer = malloc(MAXPATHLEN);
     if(n_errors > 0) {
@@ -408,8 +404,8 @@ int output_table(void* results, int n_results, long long unsigned int total) {
             if(output_names)
                 get_name(gid, name_buffer);
             else
-                sprintf(name_buffer, "%u", gid);
-            printf("%+24s  %llu\n", name_buffer, size);
+                sprintf(name_buffer, "%llu", gid);
+            printf("%24s  %llu\n", name_buffer, size);
         }
         printf("\n");
     }
@@ -420,10 +416,10 @@ int output_table(void* results, int n_results, long long unsigned int total) {
         if(output_names)
             get_name(gid, name_buffer);
         else
-            sprintf(name_buffer, "%u", gid);
-        printf("%+24s  %llu\n", name_buffer, size);
+            sprintf(name_buffer, "%llu", gid);
+        printf("%24s  %llu\n", name_buffer, size);
     }
-    printf("%+24s  %llu\n", "Total", total);
+    printf("%24s  %llu\n", "Total", total);
     free(name_buffer);
     return 0;
 }
@@ -468,7 +464,7 @@ int output_json(void* results, int n_results, long long unsigned int total) {
             if(output_names)
                 get_name(gid, name_buffer);
             else
-                sprintf(name_buffer, "%u", gid);
+                sprintf(name_buffer, "%llu", gid);
             if(out_size > 0)
                 printf(",\n");
             out_size += 1;
@@ -487,7 +483,7 @@ int output_json(void* results, int n_results, long long unsigned int total) {
         if(output_names)
             get_name(gid, name_buffer);
         else
-            sprintf(name_buffer, "%u", gid);
+            sprintf(name_buffer, "%llu", gid);
         if(out_size > 0)
             printf(",\n");
         out_size += 1;
@@ -589,7 +585,6 @@ void pack_result(struct tr_args *result, unsigned int gids[], long long unsigned
 int add_summary(void* tstructs, int n_results, long long unsigned int *total) {
     struct tr_args **results = tstructs;
     int i, j;
-    int out_dir = 0, out_size = 0;
     unsigned long long int size, sizes[MAXGIDS];
     unsigned int gid, gids[MAXGIDS];
 
@@ -632,7 +627,7 @@ int add_summary(void* tstructs, int n_results, long long unsigned int *total) {
 static void* fts_walk(void *arg) {
     FTS *stream;
     FTSENT *entry;
-    int i, j;
+    int i;
     bool insert = false;
     bool error = false;
     long long unsigned int audit_size;
@@ -641,10 +636,7 @@ static void* fts_walk(void *arg) {
     unsigned int gids[MAXGIDS];
     struct inode_entry *table[INODETABLE];
     struct tr_args *targs = arg;
-    int** n_results = targs->n_results;
-    long long unsigned int **data = targs->data;
     char* path = targs->path;
-    bool store_device = true;
 
     // FTS needs a null-terminated list of paths as argument
     char *paths[2] = {path, NULL};
@@ -696,31 +688,31 @@ static void* fts_walk(void *arg) {
             // Regular file
             case FTS_F:
                 if(verbose)
-                    printf("+file      %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
+                    printf("+file      %s (%ld)\n", entry->fts_path, entry->fts_statp->st_size);
 		insert = true;
                 break;
             // Directory
             case FTS_D:
                 if(verbose)
-                    printf("+directory %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
+                    printf("+directory %s (%ld)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
             // Symbolic link
             case FTS_SL:
                 if(verbose)
-                    printf("+symlnk    %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
+                    printf("+symlnk    %s (%ld)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
             // Broken symlink
             case FTS_SLNONE:
                 if(verbose)
-                    printf("+brksymlnk %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
+                    printf("+brksymlnk %s (%ld)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
             // Uncategorized file
             case FTS_DEFAULT:
                 if(verbose)
-                    printf("+uncat     %s (%llu)\n", entry->fts_path, entry->fts_statp->st_size);
+                    printf("+uncat     %s (%ld)\n", entry->fts_path, entry->fts_statp->st_size);
                 insert = true;
                 break;
             // A directory we could not descend into
@@ -761,8 +753,8 @@ static void* fts_walk(void *arg) {
 	if(insert && (entry->fts_statp->st_nlink > 1)) {
 	    if((i=insert_inode(entry->fts_statp->st_ino, table)) != 0) {
                 insert = false;
-	        if(verbose)
-	            printf("-inode   %s inode %llu has already been counted\n", entry->fts_path, entry->fts_statp->st_ino);
+	        if(trace)
+	            printf("-inode   %s inode %lu has already been counted\n", entry->fts_path, entry->fts_statp->st_ino);
 	    }
 	}
 
@@ -806,7 +798,6 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs) {
     DIR *dp;
     struct dirent *entry;
     struct stat meta;
-    int i, status;
     char* temppath = malloc(MAXPATHLEN);
     unsigned int sd = 0;
 
@@ -873,8 +864,7 @@ int tr_recover_slots(pthread_t *thread_ids[], unsigned int max_n_threads) {
  *   The index of the available element
  */
 int tr_find_slot(pthread_t *thread_ids[], unsigned int max_n_threads) {
-    int i, status;
-    int slot = -1;
+    int i;
     while(1) {
         // If a slot is available, return the index
         for(i=0;i<max_n_threads;i++) {
@@ -930,15 +920,14 @@ int walk(char* path, unsigned int max_n_threads) {
     DIR *dp;
     struct dirent *entry;
     struct stat meta;
-    int i, j, status, thread_i;
+    int i, status, thread_i;
     char* temppath = malloc(MAXPATHLEN);
     bool insert, process;
     long long unsigned int audit_size, grand_total=0;
     long long unsigned int sizes[MAXGIDS];
-    long long unsigned int **data;
     unsigned int gids[MAXGIDS];
     unsigned int id;
-    unsigned int n_subdirs = 0, subdir_count=1, n_groups = 0;
+    unsigned int n_subdirs = 0, subdir_count=1;
     struct inode_entry *table[INODETABLE];
 
 
@@ -1007,17 +996,17 @@ int walk(char* path, unsigned int max_n_threads) {
         switch(meta.st_mode & S_IFMT) {
             case S_IFLNK:
                 if(verbose)
-                    printf("entry: Not following symlink %s\n", temppath);
+                    printf("+symlink   %s (%ld)\n", temppath, meta.st_size);
                 insert = true; 
                 break;
             case S_IFREG:
                 if(verbose)
-                    printf("entry: Processing regular file %s\n", temppath);
+                    printf("+file      %s (%ld)\n", temppath, meta.st_size);
                 insert = true;
                 break;
             case S_IFDIR:
                 if(verbose)
-                    printf("entry: Processing directory %s\n", temppath);
+                    printf("+directory %s (%ld)\n", temppath, meta.st_size);
                 if(strcmp(".", entry->d_name) == 0)
                     insert = true;
                 else
@@ -1025,7 +1014,7 @@ int walk(char* path, unsigned int max_n_threads) {
                 break;
             default:
                 if(verbose)
-                    printf("entry: Skipping file %s\n", temppath);
+                    printf("-skip     %s\n", temppath);
         }
 
         // Skip inodes that have been previously visited
@@ -1033,8 +1022,8 @@ int walk(char* path, unsigned int max_n_threads) {
             if((i=insert_inode(meta.st_ino, table)) != 0) {
                 insert = false;
 		process = false;
-                if(verbose)
-                    printf("-inode   %s inode %llu has already been counted\n", temppath, meta.st_ino);
+                if(trace)
+                    printf("-inode   %s inode %lu has already been counted\n", temppath, meta.st_ino);
             }
         } 
 
