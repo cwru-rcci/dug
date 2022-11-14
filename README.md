@@ -36,8 +36,8 @@ In practice, we have not found the following to be disruptive or frequent, but y
 C---D   E---F   G---H
 ```
 Where thread 1 inventories directory A, thread 2 inventories directory B, and a hard links exist between descendant file pairs [`C`,`D`], [`E`,`F`] and [`G`,`H`]. 
-Thread 1 will count [`D`,`E`] (skipping C because it is hard linked file D already processed by Thread 1) and 
-Thread 2 will count [`F`,`G`] (skipping H because it is hard linked to file G already processed by Thread 2). 
+Thread 1 will count [`D`,`E`] (skipping `C` because it is hard linked to file `D` already processed by Thread 1) and 
+Thread 2 will count [`F`,`G`] (skipping `H` because it is hard linked to file `G` already processed by Thread 2). 
 Both threads count the file represented by `E`/`F` towards the usage summary of their respective directories because they each are tracking inodes separately. 
 You can mitigate the problem by running single threaded with `-t 1` if it is a significant concern.
 
