@@ -791,16 +791,18 @@ static void* fts_walk(void *arg) {
  * ARGUMENT
  *   char* path : The directory to scan
  *   unsigned int *n_subdirs : Address where the count is stored
+ *   long long unsinged int devnum: Address to store directory device num
  * RETURN
  *   0 on success, 1 on error
  */
-int get_n_subdirs(char* path, unsigned int *n_subdirs) {
+int get_n_subdirs(char* path, unsigned int *n_subdirs, long long unsigned int *devnum) {
     DIR *dp;
     struct dirent *entry;
     struct stat meta;
     char* temppath = malloc(MAXPATHLEN);
     unsigned int sd = 0;
 
+    // Open directory for reading or return with error
     dp = opendir(path);
     if(dp == NULL) {
         store_error(path, strerror(errno));
@@ -808,6 +810,16 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs) {
         return 1;
     }
 
+    // stat the directory to get device number
+    if(lstat(path, &meta) != 0) {
+        store_error(temppath, "Could not stat file");
+        free(temppath);
+	return 1;
+    }
+    *devnum = meta.st_dev;
+
+    // Read the directory and count the number of subdirectories
+    // on the same device
     while((entry=readdir(dp))) {
         if(strcmp(".", entry->d_name) == 0 || strcmp("..", entry->d_name) == 0)
             continue;
@@ -818,7 +830,7 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs) {
             continue;
         }
 
-        if((meta.st_mode & S_IFMT) == S_IFDIR)
+	if(((meta.st_mode & S_IFMT) == S_IFDIR) && (meta.st_dev == *devnum))
             sd += 1;
     }
  
@@ -923,7 +935,7 @@ int walk(char* path, unsigned int max_n_threads) {
     int i, status, thread_i;
     char* temppath = malloc(MAXPATHLEN);
     bool insert, process;
-    long long unsigned int audit_size, grand_total=0;
+    long long unsigned int audit_size, grand_total=0, devnum=0;
     long long unsigned int sizes[MAXGIDS];
     unsigned int gids[MAXGIDS];
     unsigned int id;
@@ -933,7 +945,7 @@ int walk(char* path, unsigned int max_n_threads) {
 
     // Find the number of sub-directories under the root
     // path
-    if((status=get_n_subdirs(path, &n_subdirs)) != 0) {
+    if((status=get_n_subdirs(path, &n_subdirs, &devnum)) != 0) {
         exit_status = 1;
         return 1;
     }
@@ -1005,12 +1017,18 @@ int walk(char* path, unsigned int max_n_threads) {
                 insert = true;
                 break;
             case S_IFDIR:
-                if(verbose)
-                    printf("+directory %s (%ld)\n", temppath, meta.st_size);
-                if(strcmp(".", entry->d_name) == 0)
-                    insert = true;
-                else
-                    process = true;
+                if(meta.st_dev != devnum) {
+		    if(verbose)
+	                printf("-skip     %s on another device (%ld)\n", temppath, meta.st_size);
+		}
+		else {
+	            if(verbose)
+                        printf("+directory %s (%ld)\n", temppath, meta.st_size);
+                    if(strcmp(".", entry->d_name) == 0)
+                        insert = true;
+                    else
+                        process = true;
+		}
                 break;
             default:
                 if(verbose)
