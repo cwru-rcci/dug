@@ -387,7 +387,7 @@ int json_output_failure() {
  *   0 on success, 1 on failure
  */
 int format_size(unsigned long long int size, char* buffer) {
-    char units[6] = {'B','K','M','G','T','P'};
+    char units[7] = {'B','K','M','G','T','P','E'};
     unsigned long long step = 1024;
     unsigned long long int mag = 1;
     unsigned int i=0, reduced;
@@ -397,7 +397,7 @@ int format_size(unsigned long long int size, char* buffer) {
 	return 0;
     }
 
-    while(i<7) {
+    while(i<6) {
         if(size < mag*step) {
 	    reduced = (int)(size/mag);
             sprintf(buffer, "%u%c", reduced, units[i]);
@@ -407,7 +407,9 @@ int format_size(unsigned long long int size, char* buffer) {
 	mag=mag*step;
     }
 
-    sprintf(buffer, "NaN");
+    // Default to exabytes
+    reduced = (int)(size/mag);
+    sprintf(buffer, "%u%c", reduced, units[i]);
     return 1;
 }
 
