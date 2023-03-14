@@ -26,6 +26,7 @@
 #include<errno.h>
 #include<string.h>
 #include<unistd.h>
+#include<getopt.h>
 #include<grp.h>
 #include<pwd.h>
 #include<fts.h>
@@ -58,6 +59,9 @@ bool summarize_by_user = false;
 
 // Compute size in blocks occupied rather than actual file size
 bool size_in_blocks = true;
+
+// Output human ready sizes
+bool human_readable = false;
 
 // Maximum number of errors to encounter before giving up
 int max_errors = 128;
@@ -370,6 +374,43 @@ int json_output_failure() {
     return 0;
 }
 
+/* SYNOPSIS
+ *   Format size in bytes to a human readable number (size and unit B,K,M,G,T,P)
+ *   if human_readable is true and stores in return buffer. If human_readable
+ *   is false, stores the size in bytes in the buffer with no unit.
+ *
+ * ARGUMENT
+ *   unsigned long long int: usage in bytes
+ *   char* buffer: Buffer where formatted size is stored
+ *
+ * RETURN
+ *   0 on success, 1 on failure
+ */
+int format_size(unsigned long long int size, char* buffer) {
+    char units[6] = {'B','K','M','G','T','P'};
+    unsigned long long step = 1024;
+    unsigned long long int mag = 1;
+    unsigned int i=0, reduced;
+
+    if(!human_readable) {
+        sprintf(buffer, "%llu", size);
+	return 0;
+    }
+
+    while(i<7) {
+        if(size < mag*step) {
+	    reduced = (int)(size/mag);
+            sprintf(buffer, "%u%c", reduced, units[i]);
+	    return 0;
+	}
+	i++; 
+	mag=mag*step;
+    }
+
+    sprintf(buffer, "NaN");
+    return 1;
+}
+
 
 /* SYNOPSIS
  *   Output result in plain text format
@@ -387,6 +428,7 @@ int output_table(void* results, int n_results, long long unsigned int total) {
     int i, j;
     unsigned long long int gid, size;
     char* name_buffer = malloc(MAXPATHLEN);
+    char* size_buffer = malloc(1024);
     if(n_errors > 0) {
         printf("=================== Errors ===================\n");
         for(i=0;i<n_errors;i++)
@@ -405,7 +447,8 @@ int output_table(void* results, int n_results, long long unsigned int total) {
                 get_name(gid, name_buffer);
             else
                 sprintf(name_buffer, "%llu", gid);
-            printf("%24s  %llu\n", name_buffer, size);
+            format_size(size, size_buffer);
+            printf("%24s  %s\n", name_buffer, size_buffer);
         }
         printf("\n");
     }
@@ -417,10 +460,13 @@ int output_table(void* results, int n_results, long long unsigned int total) {
             get_name(gid, name_buffer);
         else
             sprintf(name_buffer, "%llu", gid);
-        printf("%24s  %llu\n", name_buffer, size);
+        format_size(size, size_buffer);
+        printf("%24s  %s\n", name_buffer, size_buffer);
     }
-    printf("%24s  %llu\n", "Total", total);
+    format_size(total, size_buffer);
+    printf("%24s  %s\n", "Total", size_buffer);
     free(name_buffer);
+    free(size_buffer);
     return 0;
 }
 
@@ -1122,13 +1168,14 @@ int usage() {
     printf("USAGE: dug [OPTIONS] <directory>\n\n");
     printf("OPTIONS\n");
     printf("    -b  Compute apparent size (default is size of blocks occupied)\n");
-    printf("    -h  Display help information\n");
+    printf("    -h  Output human readable sizes (has no effect when used with -j)\n");
     printf("    -j  Output result in JSON format (default is plain text)\n");
     printf("    -m  Maximum errors before terminating (default is 128)\n");
     printf("    -n  Output group/user names (default output uses gids/uids)\n");
     printf("    -t  Set number of threads to use (default is 4)\n");
     printf("    -u  Summarize usage by owner (default is summarize by group)\n");
     printf("    -v  Output information about each file encountered\n");
+    printf("--help  Output usage information\n");
     printf("\n");
     return 0;
 }
@@ -1149,9 +1196,19 @@ int main(int argc, char** argv) {
     if(argc < 2) 
         return usage();
 
+    // Define long options
+    static struct option long_options[] = {
+        {"help", no_argument, 0, 0},
+	{0,      0,           0, 0}
+    };
+    int option_index = 0;
+
     // Parse arguments
-    while((c = getopt(argc, argv, "hjvnbum:t:")) != -1) {
+    while((c = getopt_long(argc, argv, "hjvnbum:t:", long_options, &option_index)) != -1) {
         switch(c) {
+	    case 0:
+		if(strcmp(long_options[option_index].name, "help") == 0)
+		    return usage();
             case 'm':
                 max_errors = parse_num(optarg);
                 if(max_errors < 0 || max_errors > 65535) {
@@ -1175,8 +1232,8 @@ int main(int argc, char** argv) {
                 summarize_by_user = true;
                 break;
             case 'h':
-                usage();
-                return 0;
+                human_readable = true;
+                break;
             case 't':
                 n_threads = parse_num(optarg);
                 if(n_threads < 0 || n_threads > 16) {
