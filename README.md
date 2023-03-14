@@ -12,14 +12,15 @@ The Makefile includes targets to build the production binary `make`, build a deb
 USAGE: dug [OPTIONS] <directory>
 
 OPTIONS
-    -b  Compute apparent size (default is size in bytes of blocks occupied)
-    -h  Display help information
+    -b  Compute apparent size (default is size of blocks occupied)
+    -h  Output human readable sizes (has no effect when used with -j)
     -j  Output result in JSON format (default is plain text)
     -m  Maximum errors before terminating (default is 128)
     -n  Output group/user names (default output uses gids/uids)
     -t  Set number of threads to use (default is 4)
     -u  Summarize usage by owner (default is summarize by group)
     -v  Output information about each file encountered
+--help  Output usage information
 ```
 
 ## Limitations
