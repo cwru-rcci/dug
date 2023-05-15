@@ -1,0 +1,58 @@
+.TH DUG 1 "15 May 2023"
+.SH NAME
+dug \- Compute the owner/group composition of storage occupied under a directory and its descendents
+.SH SYNOPSIS
+\fbdug\fP [ --help ] [ --bhjmnuv ] [ -t \fIn\fP ] \fIdirectory\fP
+.SH DESCRIPTION
+\fBdug\fP is a utility similar to du that focuses on summarizing usage by group or owner. It is multi-threaded to support parallel walks of the file system, and supports output in JSON format to facilitate use in pipelines and scripts. The utility was developed to untangle quota usage in HPC environments where users belong to many groups that change over time. The resulting report outlines the total usage under the target directory (broken down by group and a grand total) and the usage by group under each sub-directory of the target. 
+.SS Options
+.TP
+\fB-b\fP
+Compute apparent size. Default is size of blocks occupied.
+.TP
+\fB-h\fP
+Output human readable sizes. Has no effect when used with \fB-j\fP.
+.TP
+\fB-j\fP
+Output result in JSON format. Default is plain text.
+.TP
+\fB-m\fP \fIn\fP
+Accept maximum of \fIn\fP errors before terminating. Default is 128.
+.TP
+\fB-n\fP
+Output group/user names. Default output uses gids/uids.
+.TP
+\fB-t\fP \fIn\fP
+Use \fIn\fP threads to compute usage. Default is 4.
+.TP
+\fB-u\fP
+Summarize usage by owner. Default is summarize by group.
+.TP
+\fB-v\fP
+Output information about each file encountered
+.SH "AUTHOR"
+Written by Sean Maxwell
+.SH "REPORTING BUGS"
+\fBdug\fP source is maintained online at <https://www.github.com/cwru-rcci/dug> where
+bug reports can be submitted
+.SH COPYRIGHT
+Copyright (c) 2022 Case Western Reserve University
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
