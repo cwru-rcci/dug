@@ -39,6 +39,9 @@
 
 extern errno;
 
+// Version number
+char* VERSION = "1.0.0";
+
 // triggers all threads to stop before completing
 volatile bool exit_now = false;
 
@@ -263,7 +266,7 @@ int free_inode_table(struct inode_entry* table[]) {
 }
 
 /* SYNOPSIS
- *   Add a new GID to the group database with intial size, or upadate an 
+ *   Add a new GID to the group database with intial size, or update an 
  *   existing entry
  *
  * ARGUMENT
@@ -936,7 +939,6 @@ int tr_find_slot(pthread_t *thread_ids[], unsigned int max_n_threads) {
         // If no slots recovered, wait a short interval. Otherwise, 
         // return the index of the first slot we opened up. 
         if((i=tr_recover_slots(thread_ids, max_n_threads)) == -1) {
-            //printf("tr   :Waiting for thread slot to become available\n");
             usleep(10000);
         }
         else
@@ -1177,8 +1179,16 @@ int usage() {
     printf("    -t  Set number of threads to use (default is 4)\n");
     printf("    -u  Summarize usage by owner (default is summarize by group)\n");
     printf("    -v  Output information about each file encountered\n");
-    printf("--help  Output usage information\n");
+    printf("    -V  Output version infromation\n");
+    printf("--help  Output usage information\n\n");
+    printf("BUGS:\n");
+    printf("     The dug source is maintained online at <https://www.github.com/cwru-rcci/dug> where bug reports can be submitted.\n");
     printf("\n");
+    return 0;
+}
+
+int version() {
+    printf("dug Version %s\n", VERSION);
     return 0;
 }
 
@@ -1200,17 +1210,20 @@ int main(int argc, char** argv) {
 
     // Define long options
     static struct option long_options[] = {
-        {"help", no_argument, 0, 0},
-	{0,      0,           0, 0}
+        {"help",    no_argument, 0, 0},
+	{"version", no_argument, 0, 0},
+	{0,         0,           0, 0}
     };
     int option_index = 0;
 
     // Parse arguments
-    while((c = getopt_long(argc, argv, "hjvnbum:t:", long_options, &option_index)) != -1) {
+    while((c = getopt_long(argc, argv, "hjvVnbum:t:", long_options, &option_index)) != -1) {
         switch(c) {
 	    case 0:
 		if(strcmp(long_options[option_index].name, "help") == 0)
 		    return usage();
+		else if(strcmp(long_options[option_index].name, "version") == 0)
+		    return version();
             case 'm':
                 max_errors = parse_num(optarg);
                 if(max_errors < 0 || max_errors > 65535) {
@@ -1221,6 +1234,8 @@ int main(int argc, char** argv) {
             case 'v':
                 verbose = true;
                 break;
+	    case 'V':
+		return version();
             case 'j':
                 json = true;
                 break;
