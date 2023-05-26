@@ -27,8 +27,8 @@ sudo apt install ./dug_1.0.0-1_amd64.deb
 You can download a release of the source code and build it on a Linux system with GCC. An example set of commands using the 1.0.0-rc1 source release is:
 ```
 wget https://github.com/cwru-rcci/dug/archive/refs/tags/v1.0.0-rc1.tar.gz
-tar xzf dug-1.0.0.tar.gz
-cd dug
+tar xzf v1.0.0-rc1.tar.gz 
+cd dug-1.0.0-rc1/
 make 
 ```
 This will create a `dug` binary in the source folder that you can run directly, or move/copy to one of the folders on your `$PATH`. The Makefile
