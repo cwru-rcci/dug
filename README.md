@@ -7,6 +7,43 @@
 The utility is intended for use on Linux operating systems, and the repository includes a Makefile authored to compile using GNU based development tools.
 The Makefile includes targets to build the production binary `make`, build a debug binary `make debug`, and remove existing binaries `make clean`.
 
+### Binary Install
+The releases include RPM and DEP packages, which can be installed using the respective package management commands on RPM and DEB based systems.
+Download the approprite package type for your system from the [releases](https://github.com/cwru-rcci/dug/releases) and install using your system package manager. E.g.:
+
+#### RHEL
+```
+wget https://github.com/cwru-rcci/dug/releases/download/v1.0.0-rc1/dug-1.0.0-1.el8.x86_64.rpm
+sudo rpm -i dug-1.0.0-1.el8.x86_64.rpm
+```
+
+#### Ubuntu
+```
+wget https://github.com/cwru-rcci/dug/releases/download/v1.0.0-rc1/dug_1.0.0-1_amd64.deb
+sudo apt install ./dug_1.0.0-1_amd64.deb
+```
+
+### Build from Source Release
+You can download a release of the source code and build it on a Linux system with GCC. An example set of commands using the 1.0.0-rc1 source release is:
+```
+wget https://github.com/cwru-rcci/dug/archive/refs/tags/v1.0.0-rc1.tar.gz
+tar xzf dug-1.0.0.tar.gz
+cd dug
+make 
+```
+This will create a `dug` binary in the source folder that you can run directly, or move/copy to one of the folders on your `$PATH`. The Makefile
+includes targets for install/uninstall that will copy/remove the binary to/from `/usr/bin` and the man page to/from `/usr/share/man/man1`.
+
+### Build from Repository
+You can clone the latest repository code and build on a Linux system with GCC using the following commands:
+```
+git clone https://github.com/cwru-rcci/dug.git
+cd dug
+make 
+```
+You can install/uninstall using the `install` or `uninstall` targets of the Makefile.
+
+
 ## Usage
 ```
 USAGE: dug [OPTIONS] <directory>
