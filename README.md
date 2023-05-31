@@ -13,22 +13,22 @@ Download the appropriate package type for your system from the [releases](https:
 
 #### RHEL
 ```
-wget https://github.com/cwru-rcci/dug/releases/download/v1.0.0-rc1/dug-1.0.0-1.el8.x86_64.rpm
+wget https://github.com/cwru-rcci/dug/releases/download/v1.0.0-rc2/dug-1.0.0-1.el8.x86_64.rpm
 sudo rpm -i dug-1.0.0-1.el8.x86_64.rpm
 ```
 
 #### Ubuntu
 ```
-wget https://github.com/cwru-rcci/dug/releases/download/v1.0.0-rc1/dug_1.0.0-1_amd64.deb
+wget https://github.com/cwru-rcci/dug/releases/download/v1.0.0-rc2/dug_1.0.0-1_amd64.deb
 sudo apt install ./dug_1.0.0-1_amd64.deb
 ```
 
 ### Build from Source Release
-You can download a release of the source code and build it on a Linux system with GCC. An example set of commands using the 1.0.0-rc1 source release is:
+You can download a release of the source code and build it on a Linux system with GCC. An example set of commands using the 1.0.0-rc2 source release is:
 ```
-wget https://github.com/cwru-rcci/dug/archive/refs/tags/v1.0.0-rc1.tar.gz
-tar xzf v1.0.0-rc1.tar.gz 
-cd dug-1.0.0-rc1/
+wget https://github.com/cwru-rcci/dug/archive/refs/tags/v1.0.0-rc2.tar.gz
+tar xzf v1.0.0-rc2.tar.gz 
+cd dug-1.0.0-rc2/
 make 
 ```
 This will create a `dug` binary in the source folder that you can run directly, or move/copy to one of the folders on your `$PATH`. The Makefile
