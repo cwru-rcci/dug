@@ -73,7 +73,7 @@ int max_errors = 128;
 int n_errors = 0;
 
 // Number of threads to use
-int n_threads = 4;
+int n_threads = 1;
 
 // Exit status. Volitile because it can be set in any thread.
 volatile int exit_status = 0;
@@ -1176,7 +1176,7 @@ int usage() {
     printf("    -j  Output result in JSON format (default is plain text)\n");
     printf("    -m  Maximum errors before terminating (default is 128)\n");
     printf("    -n  Output group/user names (default output uses gids/uids)\n");
-    printf("    -t  Set number of threads to use (default is 4)\n");
+    printf("    -t  Set number of threads to use (default is 1)\n");
     printf("    -u  Summarize usage by owner (default is summarize by group)\n");
     printf("    -v  Output information about each file encountered\n");
     printf("    -V  Output version infromation\n");
@@ -1253,8 +1253,8 @@ int main(int argc, char** argv) {
                 break;
             case 't':
                 n_threads = parse_num(optarg);
-                if(n_threads < 0 || n_threads > 16) {
-                    printf("Value for -t %s was not in range [0,16]\n", optarg);
+                if(n_threads < 0 || n_threads > 128) {
+                    printf("Value for -t %s was not in range [0,128]\n", optarg);
                     return 1;
                 }
                 break;
