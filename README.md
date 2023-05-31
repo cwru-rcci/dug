@@ -9,7 +9,7 @@ The Makefile includes targets to build the production binary `make`, build a deb
 
 ### Binary Install
 The releases include RPM and DEP packages, which can be installed using the respective package management commands on RPM and DEB based systems.
-Download the approprite package type for your system from the [releases](https://github.com/cwru-rcci/dug/releases) and install using your system package manager. E.g.:
+Download the appropriate package type for your system from the [releases](https://github.com/cwru-rcci/dug/releases) and install using your system package manager. E.g.:
 
 #### RHEL
 ```
