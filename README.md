@@ -54,9 +54,10 @@ OPTIONS
     -j  Output result in JSON format (default is plain text)
     -m  Maximum errors before terminating (default is 128)
     -n  Output group/user names (default output uses gids/uids)
-    -t  Set number of threads to use (default is 4)
+    -t  Set number of threads to use (default is 1)
     -u  Summarize usage by owner (default is summarize by group)
     -v  Output information about each file encountered
+    -V  Output version information
 --help  Output usage information
 ```
 
