@@ -1263,7 +1263,7 @@ int main(int argc, char** argv) {
 
     // Parse path, or exit if not specified
     if (optind >= argc) {
-        printf("Path argument is required! Review usage with -h\n");
+        printf("Path argument is required! Review usage with --help\n");
         return 1;
     }
     path = argv[optind];
