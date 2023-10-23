@@ -34,6 +34,7 @@
 #include<sys/stat.h>
 
 #define MAXGIDS    128
+#define MAXEXCLUDE 128
 #define MAXPATHLEN 4096 
 #define INODETABLE 16384 
 
@@ -66,6 +67,9 @@ bool size_in_blocks = true;
 // Output human ready sizes
 bool human_readable = false;
 
+// If we are using the exclude option to avoid files, set to true
+bool using_exclude = false;
+
 // Maximum number of errors to encounter before giving up
 int max_errors = 128;
 
@@ -80,6 +84,9 @@ volatile int exit_status = 0;
 
 // Error strings are stored here to include in output
 char **error_strs;
+
+// Array of inode numbers that should be excluded
+long long unsigned int exclude_inodes[MAXEXCLUDE];
 
 // Mutex to lock error table on insert
 pthread_mutex_t error_mutex;
@@ -319,6 +326,54 @@ int store_error(char* path, char* error) {
     pthread_mutex_unlock(&error_mutex);
     return 0;
 }
+
+
+int find_or_store_exclude_inode(long long unsigned int inode, bool store) {
+    int index = inode % MAXEXCLUDE;
+    int i = index;
+
+    do {
+        if(exclude_inodes[i] == inode)
+            return 0;
+        else if(exclude_inodes[i] == 0) { 
+            if(store) {
+                exclude_inodes[i] = inode;
+		return 0;
+	    }
+	    else
+                return 1;
+        }
+        i = (i+1)%MAXEXCLUDE;
+    } while(i!=index);
+
+    // Table is full and does not already contain
+    // an inode for the argument path
+    return 2;
+}
+
+
+int is_excluded(long long unsigned int inode) {
+    return find_or_store_exclude_inode(inode, false) == 0;
+}
+
+
+/*
+ */
+int store_exclude(char* path) {
+    struct stat meta;
+    if(lstat(path, &meta) != 0) {
+        printf("Error: argument path %s does not exist\n", path);
+        return 1;
+    }
+    int status = find_or_store_exclude_inode(meta.st_ino, true);
+    if(status == 0 && verbose)
+        printf("+dug       Added exclude entry for %s using inode %lu\n", path, meta.st_ino);
+    if(status == 2)
+	printf("-dug       Could not store inode for %s. The inode table for tracking exclude files is full\n", path);
+    return status;
+}
+
+
 
 
 /* SYNOPSIS
@@ -727,6 +782,13 @@ static void* fts_walk(void *arg) {
             continue;
         }
 
+        if(using_exclude && is_excluded(entry->fts_statp->st_ino)) {
+            if(verbose)
+                printf("-skip     The file %s is in the exclude list (skipping it an any descendants)\n", entry->fts_path);
+	    fts_set(stream, entry, FTS_SKIP);
+	    continue;
+	}
+
         // If maximum errors were encountered, or other unrecoverable
         // errors occured, this indicates to terminate execution
         if(exit_now)
@@ -880,6 +942,9 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs, long long unsigned int *d
             store_error(temppath, "Could not stat file");
             continue;
         }
+
+        if(using_exclude && is_excluded(meta.st_ino))
+	    continue;
 
 	if(((meta.st_mode & S_IFMT) == S_IFDIR) && (meta.st_dev == *devnum))
             sd += 1;
@@ -1053,6 +1118,13 @@ int walk(char* path, unsigned int max_n_threads) {
             continue;
         }
 
+        // Skip excluded files
+	if(using_exclude && is_excluded(meta.st_ino)) {
+            if(verbose)
+                printf("-skip      %s is in the exclude list\n", temppath);
+	    continue;
+	}
+
         // Process the file or directory
         process = insert = false;
         switch(meta.st_mode & S_IFMT) {
@@ -1161,6 +1233,14 @@ int walk(char* path, unsigned int max_n_threads) {
     return 0;
 }
 
+int get_sanitized_path(char* arg, char* output) {
+    int end = strlen(arg)-1;
+    if(arg[end] == '/')
+        arg[end]='\0';
+    sprintf(output, "%s", arg);
+    return 0;
+}
+
 /* SYNOPSIS
  *   Outputs usage information for the command
  * ARGUMENT
@@ -1174,12 +1254,13 @@ int usage() {
     printf("    -b  Compute apparent size (default is size of blocks occupied)\n");
     printf("    -h  Output human readable sizes (has no effect when used with -j)\n");
     printf("    -j  Output result in JSON format (default is plain text)\n");
-    printf("    -m  Maximum errors before terminating (default is 128)\n");
+    printf("    -m  <int> Maximum errors before terminating (default is 128)\n");
     printf("    -n  Output group/user names (default output uses gids/uids)\n");
-    printf("    -t  Set number of threads to use (default is 1)\n");
+    printf("    -t  <int> Set number of threads to use (default is 1)\n");
     printf("    -u  Summarize usage by owner (default is summarize by group)\n");
     printf("    -v  Output information about each file encountered\n");
     printf("    -V  Output version infromation\n");
+    printf("    -X <path> Do not process <path> or any descendants\n");
     printf("--help  Output usage information\n\n");
     printf("BUGS:\n");
     printf("     The dug source is maintained online at <https://www.github.com/cwru-rcci/dug> where bug reports can be submitted.\n");
@@ -1201,12 +1282,16 @@ int version() {
  */
 int main(int argc, char** argv) {
     int i;
-    char *path;   
+    char *path=malloc(2048);   
     char c; 
 
     // If run with no arguments, output usage
     if(argc < 2) 
         return usage();
+
+    // Zero the exclude inode table
+    for(i=0;i>MAXEXCLUDE;i++)
+        exclude_inodes[i]=0;
 
     // Define long options
     static struct option long_options[] = {
@@ -1217,7 +1302,7 @@ int main(int argc, char** argv) {
     int option_index = 0;
 
     // Parse arguments
-    while((c = getopt_long(argc, argv, "hjvVnbum:t:", long_options, &option_index)) != -1) {
+    while((c = getopt_long(argc, argv, "hjvVnbum:t:X:", long_options, &option_index)) != -1) {
         switch(c) {
 	    case 0:
 		if(strcmp(long_options[option_index].name, "help") == 0)
@@ -1258,6 +1343,12 @@ int main(int argc, char** argv) {
                     return 1;
                 }
                 break;
+	    case 'X':
+		using_exclude = true;
+	        if(store_exclude(optarg) != 0) {
+		    printf("Failed to process exclude option for %s\n", optarg);
+		    return 1;
+		}
         }
     }
 
@@ -1266,9 +1357,9 @@ int main(int argc, char** argv) {
         printf("Path argument is required! Review usage with --help\n");
         return 1;
     }
-    path = argv[optind];
+    get_sanitized_path(argv[optind], path);
     if(verbose)
-        printf("Auditing directory %s\n", path);
+        printf("+dug       Auditing directory %s\n", path);
 
     // Initialize error string to requested
     // number of pointers
@@ -1290,6 +1381,7 @@ int main(int argc, char** argv) {
         free(error_strs[i]);
     }
     free(error_strs);
+    free(path);
 
     return exit_status;
 }
