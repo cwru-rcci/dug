@@ -1,10 +1,10 @@
-.TH DUG 1 "15 May 2023"
+.TH DUG 1 "24 October 2023"
 .SH NAME
 dug \- Compute the owner/group composition of storage occupied under a directory and its descendants
 .SH SYNOPSIS
-\fbdug\fP [ --help ] [ --bhjmnuv ] [ -t \fIn\fP ] \fIdirectory\fP
+\fbdug\fP [ --help ] [ --bhjmnuv ] [ -t \fIn\fP ] [ -X \fIpath\fP] \fIdirectory\fP
 .SH DESCRIPTION
-\fBdug\fP is a utility similar to du that focuses on summarizing usage by group or owner. It is multi-threaded to support parallel walks of the file system, and supports output in JSON format to facilitate use in pipelines and scripts. The utility was developed to untangle quota usage in HPC environments where users belong to many groups that change over time. The resulting report outlines the total usage under the target directory (broken down by group and a grand total) and the usage by group under each sub-directory of the target. 
+\fBdug\fP is a utility similar to du that focuses on summarizing usage by group or owner. It is multi-threaded to support parallel walks of the file system, and supports output in JSON format to facilitate use in pipelines and scripts. The utility was developed to untangle quota usage in HPC environments where users belong to many groups that change over time. The output describes the total usage under the target directory (broken down by group and a grand total) and the usage by group under each sub-directory of the target. 
 .SS Options
 .TP
 \fB-b\fP
@@ -36,6 +36,9 @@ Output information about each file encountered.
 .TP
 \fB-V\fP
 Output dug version information.
+.TP
+\fB-X\fP \fIpath\fP
+Do not process <path> or any descendants. Multiple -X can be specified to exclude multiple files.
 
 
 .SH "AUTHOR"
