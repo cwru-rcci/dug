@@ -320,6 +320,13 @@ int store_error(char* path, char* error) {
 
     int total_length = strlen(path)+strlen(error);
     error_strs[n_errors] = malloc(total_length+10);
+    if(error_strs[n_errors] == NULL) {
+        printf("Could not allocate memory to store errors. Exiting as memory appears exhausted\n");
+	exit_now = true;
+	exit_status = 4;
+	return 1;
+    }
+
     sprintf(error_strs[n_errors], "%s: %s", path, error);
     n_errors++;
 
@@ -914,6 +921,7 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs, long long unsigned int *d
     struct stat meta;
     char* temppath = malloc(MAXPATHLEN);
     unsigned int sd = 0;
+    int rval = 0;
 
     // Open directory for reading or return with error
     dp = opendir(path);
@@ -937,7 +945,12 @@ int get_n_subdirs(char* path, unsigned int *n_subdirs, long long unsigned int *d
         if(strcmp(".", entry->d_name) == 0 || strcmp("..", entry->d_name) == 0)
             continue;
 
-        sprintf(temppath, "%s/%s", path, entry->d_name);
+        rval = snprintf(temppath, MAXPATHLEN, "%s/%s", path, entry->d_name);
+	if(rval < 0 || rval >= MAXPATHLEN) {
+            store_error(entry->d_name, "Could not build full path; Over maximum path length  or error occured\n");
+	    return 1;
+	}
+
         if(lstat(temppath, &meta) != 0) {
             store_error(temppath, "Could not stat file");
             continue;
@@ -1112,7 +1125,12 @@ int walk(char* path, unsigned int max_n_threads) {
             return 1;
 
         // Get the file metadata
-        sprintf(temppath, "%s/%s", path, entry->d_name);
+        status = snprintf(temppath, MAXPATHLEN, "%s/%s", path, entry->d_name);
+        if(status < 0 || status >= MAXPATHLEN) {
+            store_error(entry->d_name, "Could not build full path; Over maximum path length or error occured\n");
+            return 1;    
+	}
+
         if(lstat(temppath, &meta) != 0) {
             store_error(temppath, "entry: Could not stat file");
             continue;
@@ -1235,9 +1253,13 @@ int walk(char* path, unsigned int max_n_threads) {
 
 int get_sanitized_path(char* arg, char* output) {
     int end = strlen(arg)-1;
+    int status;
     if(arg[end] == '/')
         arg[end]='\0';
-    sprintf(output, "%s", arg);
+    status = snprintf(output, MAXPATHLEN, "%s", arg);
+    if(status < 0 || status >= MAXPATHLEN) {
+	return 1;
+    }
     return 0;
 }
 
@@ -1293,6 +1315,10 @@ int main(int argc, char** argv) {
     // Zero the exclude inode table
     for(i=0;i>MAXEXCLUDE;i++)
         exclude_inodes[i]=0;
+
+    // Initialize error string to requested
+    // number of pointers
+    error_strs = malloc(max_errors*sizeof(char*));
 
     // Define long options
     static struct option long_options[] = {
@@ -1358,13 +1384,14 @@ int main(int argc, char** argv) {
         printf("Path argument is required! Review usage with --help\n");
         return 1;
     }
-    get_sanitized_path(argv[optind], path);
-    if(verbose)
+    
+    i = get_sanitized_path(argv[optind], path);
+    if(i > 0) {
+        printf("Could not use input path. It is over the maximum length %d or it could not be formatted to process\n", MAXPATHLEN);
+	return 1;
+    }
+    else if(verbose)
         printf("+dug       Auditing directory %s\n", path);
-
-    // Initialize error string to requested
-    // number of pointers
-    error_strs = malloc(max_errors*sizeof(char*));
 
     // Compile the usage by group under path
     i = walk(path, n_threads);
