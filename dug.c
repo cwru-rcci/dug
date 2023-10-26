@@ -1283,7 +1283,7 @@ int version() {
  */
 int main(int argc, char** argv) {
     int i;
-    char *path=malloc(2048);   
+    char *path=malloc(MAXPATHLEN);   
     char c; 
 
     // If run with no arguments, output usage
