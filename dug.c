@@ -1125,7 +1125,7 @@ int walk(char* path, unsigned int max_n_threads) {
             return 1;
 
         // Get the file metadata
-        status = snprintf(temppath, MAXPATHLEN, "%s/%s", path, entry->d_name);
+        status = snprintf(temppath, MAXPATHLEN, "%s%s", path, entry->d_name);
         if(status < 0 || status >= MAXPATHLEN) {
             store_error(entry->d_name, "Could not build full path; Over maximum path length or error occured\n");
             return 1;    
@@ -1254,12 +1254,17 @@ int walk(char* path, unsigned int max_n_threads) {
 int get_sanitized_path(char* arg, char* output) {
     int end = strlen(arg)-1;
     int status;
-    if(arg[end] == '/')
-        arg[end]='\0';
+    
     status = snprintf(output, MAXPATHLEN, "%s", arg);
     if(status < 0 || status >= MAXPATHLEN) {
 	return 1;
     }
+
+    if(arg[end] != '/' && MAXPATHLEN > end+2) {
+        output[end+1]='/';
+	output[end+2]='\0';
+    }
+
     return 0;
 }
 
